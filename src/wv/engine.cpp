@@ -1,5 +1,7 @@
 #include "engine.h"
 
+#include <wv/drivers/vulkan/vk_init.h>
+
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_vulkan.h>
@@ -135,7 +137,14 @@ void wv::VulkanEngine::_initVulkan()
 	m_device = vkbDevice.device;
 	m_gpu    = physicalDevice.physical_device;
 
+
+	// Setup Swapchain & Frames
+
 	_createSwapchain( m_windowExtent.width, m_windowExtent.height );
+
+	m_graphicsQueue = vkbDevice.get_queue( vkb::QueueType::graphics ).value();
+	m_graphicsQueueFamily = vkbDevice.get_queue_index( vkb::QueueType::graphics ).value();
+
 
 }
 
@@ -143,6 +152,11 @@ void wv::VulkanEngine::_initVulkan()
 
 void wv::VulkanEngine::_shutdownVulkan()
 {
+	vkDeviceWaitIdle( m_device );
+
+	for ( int i = 0; i < FRAME_OVERLAP; i++ )
+		vkDestroyCommandPool( m_device, m_frames[ i ].cmdPool, nullptr );
+	
 	_destroySwapchain();
 
 	vkDestroySurfaceKHR( m_instance, m_surface, nullptr );
@@ -186,4 +200,19 @@ void wv::VulkanEngine::_destroySwapchain()
 
 	for ( size_t i = 0; i < m_swapchainImageViews.size(); i++ )
 		vkDestroyImageView( m_device, m_swapchainImageViews[ i ], nullptr );
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+
+void wv::VulkanEngine::_initCommands()
+{
+	VkCommandPoolCreateInfo commandPoolInfo = wv::Vulkan::commandPoolCreateInfo( m_graphicsQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT );
+	
+	for ( size_t i = 0; i < FRAME_OVERLAP; i++ )
+	{
+		VK_CHECK( vkCreateCommandPool( m_device, &commandPoolInfo, nullptr, &m_frames[ i ].cmdPool ) );
+
+		VkCommandBufferAllocateInfo cmdAllocInfo = wv::Vulkan::commandBufferAllocateInfo( m_frames[ i ].cmdPool );
+		VK_CHECK( vkAllocateCommandBuffers( m_device, &cmdAllocInfo, &m_frames[ i ].cmdBuffer ) );
+	}
 }

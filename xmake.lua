@@ -1,14 +1,5 @@
----------------------------------
---! @file xmake.lua
---! @author Argore
---! @brief Template C++ configuration
---! @version 0.1
---! @date 2025-04-04
---! 
---! @copyright Copyright (c) 2025 Argore
----------------------------------
 
-local PROJECT_NAME = "PaleoVk"
+local PROJECT_NAME = "WyvernVk"
 
 local VK_SDK = os.getenv("VK_SDK_PATH")
 local ENGINE_PACKAGES = {
@@ -21,7 +12,6 @@ set_languages("clatest", "cxxlatest")
 
 add_rules "mode.debug"
 add_rules "mode.release"
-
 
 add_requires(ENGINE_PACKAGES)
 
