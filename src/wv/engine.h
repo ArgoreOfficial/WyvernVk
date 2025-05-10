@@ -1,6 +1,8 @@
 #pragma once
 
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan.h>
+
+#include <vector>
 
 #define VK_CHECK(x)                                                    \
 	do                                                                 \
@@ -28,6 +30,11 @@ struct FrameData
 	VkCommandPool   cmdPool  { VK_NULL_HANDLE };
 	VkCommandBuffer cmdBuffer{ VK_NULL_HANDLE };
 
+	VkSemaphore swapchainSemaphore;
+	VkSemaphore renderSemaphore;
+
+	VkFence renderFence;
+
 };
 
 constexpr unsigned int FRAME_OVERLAP = 2;
@@ -36,11 +43,13 @@ class VulkanEngine
 {
 
 public:
-	bool init();
-	void shutdown();
-	void run();
+	bool Setup();
+	void Shutdown();
+	void Run();
 
-
+	void Update();
+	void Draw();
+	
 private:
 
 	bool _initWindow();
@@ -54,6 +63,12 @@ private:
 
 	void _initCommands();
 
+	void _createSyncStructures();
+
+private:
+	FrameData& _getCurrentFrame() { return m_frames[ m_frameNumber % FRAME_OVERLAP ]; };
+
+private:
 	SDL_Window* m_window{ nullptr };
 
 	Extent2D m_windowExtent{ 640, 360 };
@@ -75,8 +90,6 @@ private:
 
 	FrameData m_frames[ FRAME_OVERLAP ];
 	uint64_t m_frameNumber = 0;
-
-	FrameData& get_current_frame() { return m_frames[ m_frameNumber % FRAME_OVERLAP ]; };
 
 	VkQueue m_graphicsQueue;
 	uint32_t m_graphicsQueueFamily;

@@ -1,6 +1,7 @@
 #include "engine.h"
 
 #include <wv/drivers/vulkan/vk_init.h>
+#include <wv/drivers/vulkan/vk_util.h>
 
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
@@ -24,7 +25,7 @@ constexpr const char* APP_NAME    = "WyvernVk";
 
 ///////////////////////////////////////////////////////////////////////////////////////
 
-bool wv::VulkanEngine::init()
+bool wv::VulkanEngine::Setup()
 {
 	if ( !_initWindow() )
 		return false;
@@ -36,7 +37,7 @@ bool wv::VulkanEngine::init()
 
 ///////////////////////////////////////////////////////////////////////////////////////
 
-void wv::VulkanEngine::shutdown()
+void wv::VulkanEngine::Shutdown()
 {
 	_shutdownVulkan();
 	_shutdownWindow();
@@ -44,7 +45,7 @@ void wv::VulkanEngine::shutdown()
 
 ///////////////////////////////////////////////////////////////////////////////////////
 
-void wv::VulkanEngine::run()
+void wv::VulkanEngine::Run()
 {
 	bool running = true;
 	while ( running )
@@ -56,9 +57,72 @@ void wv::VulkanEngine::run()
 
 		}
 
-
+		Update();
+		Draw();
 
 	}
+}
+
+void wv::VulkanEngine::Update()
+{
+}
+
+void wv::VulkanEngine::Draw()
+{
+	VK_CHECK( vkWaitForFences( m_device, 1, &_getCurrentFrame().renderFence, VK_TRUE, 1000000000 ) );
+	VK_CHECK( vkResetFences  ( m_device, 1, &_getCurrentFrame().renderFence ) );
+
+	uint32_t swapchainImageIndex = 0;
+	VK_CHECK( vkAcquireNextImageKHR( m_device, m_swapchain, 1000000000, _getCurrentFrame().swapchainSemaphore, VK_NULL_HANDLE, &swapchainImageIndex ) );
+
+	VkCommandBuffer cmd = _getCurrentFrame().cmdBuffer;
+	
+	VK_CHECK( vkResetCommandBuffer( cmd, 0 ) );
+	
+	VkCommandBufferBeginInfo beginInfo = Vulkan::CmdBufferBeginInfo();
+	VK_CHECK( vkBeginCommandBuffer( cmd, &beginInfo ) );
+	
+	{
+		VkImage swapchainImage = m_swapchainImages[ swapchainImageIndex ];
+
+		wv::Vulkan::TransitionImage( cmd, swapchainImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL );
+
+		float flash = std::abs( std::sin( m_frameNumber / 120.f));
+		VkClearColorValue clearColor{ { 0.0f, 0.0f, flash, 1.0f } };
+
+		VkImageSubresourceRange clearRange = wv::Vulkan::ImageSubresourceRange( VK_IMAGE_ASPECT_COLOR_BIT );
+		vkCmdClearColorImage( cmd, swapchainImage, VK_IMAGE_LAYOUT_GENERAL, &clearColor, 1, &clearRange );
+
+		wv::Vulkan::TransitionImage( cmd, swapchainImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR );
+	}
+	
+	VK_CHECK( vkEndCommandBuffer( cmd ) );
+
+	{
+		VkCommandBufferSubmitInfo cmdSubmitInfo = wv::Vulkan::CmdBufferSubmitInfo( cmd );
+
+		VkSemaphoreSubmitInfo waitInfo   = wv::Vulkan::SemaphoreSubmitInfo( VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, _getCurrentFrame().swapchainSemaphore );
+		VkSemaphoreSubmitInfo signalInfo = wv::Vulkan::SemaphoreSubmitInfo( VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, _getCurrentFrame().renderSemaphore );
+
+		VkSubmitInfo2 submitInfo = wv::Vulkan::SubmitInfo( &cmdSubmitInfo, &signalInfo, &waitInfo );
+
+		VK_CHECK( vkQueueSubmit2( m_graphicsQueue, 1, &submitInfo, _getCurrentFrame().renderFence ) );
+	}
+
+	{
+		VkPresentInfoKHR presentInfo{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, nullptr };
+		presentInfo.pSwapchains    = &m_swapchain;
+		presentInfo.swapchainCount = 1;
+
+		presentInfo.pWaitSemaphores    = &_getCurrentFrame().renderSemaphore;
+		presentInfo.waitSemaphoreCount = 1;
+
+		presentInfo.pImageIndices = &swapchainImageIndex;
+
+		VK_CHECK( vkQueuePresentKHR( m_graphicsQueue, &presentInfo ) );
+		m_frameNumber++;
+	}
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -145,7 +209,8 @@ void wv::VulkanEngine::_initVulkan()
 	m_graphicsQueue = vkbDevice.get_queue( vkb::QueueType::graphics ).value();
 	m_graphicsQueueFamily = vkbDevice.get_queue_index( vkb::QueueType::graphics ).value();
 
-
+	_initCommands();
+	_createSyncStructures();
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -155,7 +220,14 @@ void wv::VulkanEngine::_shutdownVulkan()
 	vkDeviceWaitIdle( m_device );
 
 	for ( int i = 0; i < FRAME_OVERLAP; i++ )
+	{
 		vkDestroyCommandPool( m_device, m_frames[ i ].cmdPool, nullptr );
+
+		vkDestroyFence( m_device, m_frames[ i ].renderFence, nullptr );
+
+		vkDestroySemaphore( m_device, m_frames[ i ].renderSemaphore, nullptr );
+		vkDestroySemaphore( m_device, m_frames[ i ].swapchainSemaphore, nullptr );
+	}
 	
 	_destroySwapchain();
 
@@ -206,13 +278,27 @@ void wv::VulkanEngine::_destroySwapchain()
 
 void wv::VulkanEngine::_initCommands()
 {
-	VkCommandPoolCreateInfo commandPoolInfo = wv::Vulkan::commandPoolCreateInfo( m_graphicsQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT );
+	VkCommandPoolCreateInfo commandPoolInfo = wv::Vulkan::CommandPoolCreateInfo( m_graphicsQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT );
 	
 	for ( size_t i = 0; i < FRAME_OVERLAP; i++ )
 	{
 		VK_CHECK( vkCreateCommandPool( m_device, &commandPoolInfo, nullptr, &m_frames[ i ].cmdPool ) );
 
-		VkCommandBufferAllocateInfo cmdAllocInfo = wv::Vulkan::commandBufferAllocateInfo( m_frames[ i ].cmdPool );
+		VkCommandBufferAllocateInfo cmdAllocInfo = wv::Vulkan::CommandBufferAllocateInfo( m_frames[ i ].cmdPool );
 		VK_CHECK( vkAllocateCommandBuffers( m_device, &cmdAllocInfo, &m_frames[ i ].cmdBuffer ) );
+	}
+}
+
+void wv::VulkanEngine::_createSyncStructures()
+{
+	VkFenceCreateInfo fenceInfo = wv::Vulkan::FenceCreateInfo( VK_FENCE_CREATE_SIGNALED_BIT );
+	VkSemaphoreCreateInfo semaphoreInfo = wv::Vulkan::SemaphoreCreateInfo();
+
+	for ( size_t i = 0; i < FRAME_OVERLAP; i++ )
+	{
+		VK_CHECK( vkCreateFence( m_device, &fenceInfo, nullptr, &m_frames[ i ].renderFence ) );
+
+		VK_CHECK( vkCreateSemaphore( m_device, &semaphoreInfo, nullptr, &m_frames[ i ].swapchainSemaphore ) );
+		VK_CHECK( vkCreateSemaphore( m_device, &semaphoreInfo, nullptr, &m_frames[ i ].renderSemaphore ) );
 	}
 }

@@ -16,10 +16,10 @@
 int main()
 {
 	wv::VulkanEngine engine{};
-	if ( engine.init() )
+	if ( engine.Setup() )
 	{
-		engine.run();
-		engine.shutdown();
+		engine.Run();
+		engine.Shutdown();
 	}
 	else
 	{
